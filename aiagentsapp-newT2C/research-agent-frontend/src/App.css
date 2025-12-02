@@ -1,0 +1,104 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap');
+
+:root {
+  --bg-dark: #020617;
+  --bg-panel: #0f172a;
+  --neon-cyan: #22d3ee;
+  --neon-indigo: #6366f1;
+  --text-primary: #f1f5f9;
+  --text-secondary: #94a3b8;
+}
+
+body, html {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+  background-color: var(--bg-dark);
+  font-family: 'Inter', sans-serif;
+  color: var(--text-primary);
+}
+
+button {
+  font-family: 'Inter', sans-serif;
+  outline: none;
+  border: none;
+  background: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* --- LAYOUT --- */
+.app-container {
+  display: flex;
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  position: relative;
+  background: radial-gradient(circle at top right, #1e1b4b 0%, #020617 60%);
+}
+
+.left-panel-container {
+  flex-shrink: 0;
+  height: 100%;
+  z-index: 50;
+  border-right: 1px solid rgba(255, 255, 255, 0.05);
+  background: rgba(15, 23, 42, 0.6);
+  backdrop-filter: blur(12px);
+}
+
+.right-panel {
+  flex: 1;
+  height: 100%;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.right-panel-content {
+  width: 100%;
+  height: 100%;
+}
+
+/* --- SIDEBAR TOGGLE BUTTON (Top Left) --- */
+.sidebar-toggle-btn {
+  position: absolute;
+  top: 20px;
+  left: 20px;
+  z-index: 9999; /* Always on top */
+  
+  background: rgba(15, 23, 42, 0.8);
+  border: 1px solid rgba(34, 211, 238, 0.3);
+  color: #22d3ee;
+  
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  backdrop-filter: blur(4px);
+}
+
+.sidebar-toggle-btn:hover {
+  background: #22d3ee;
+  color: #000;
+  box-shadow: 0 0 20px rgba(34, 211, 238, 0.6);
+  transform: scale(1.05);
+}
+
+/* --- SCROLLBARS --- */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.1); border-radius: 10px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.2); }
+
+/* --- ANIMATIONS --- */
+.animate-spin { animation: spin 1s linear infinite; }
+@keyframes spin { 100% { transform: rotate(360deg); } }

@@ -1,0 +1,25 @@
+fastapi
+uvicorn[standard]
+python-dotenv
+langchain-groq
+langchain-experimental
+langchain-core
+pypdf
+python-multipart
+google-search-results
+duckduckgo-search
+langchain-community
+ddgs
+
+lxml
+pydantic
+pypdf
+python-dotenv
+cryptography==3.1
+
+sentence-transformers
+faiss-cpu   # Use faiss-gpu if you have a compatible GPU
+redis
+langgraph
+neo4j
+
