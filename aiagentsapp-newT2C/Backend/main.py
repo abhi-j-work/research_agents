@@ -3,7 +3,7 @@
 import os
 import base64
 import json
-import asyncio
+import asyncio,httpx
 from typing import List, Optional, Dict, Any
 
 from fastapi import FastAPI, UploadFile, File, HTTPException, Query, Response
@@ -11,9 +11,21 @@ from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 import logging
 from fastapi import HTTPException, Query
+import httpx
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
+from dotenv import load_dotenv
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_groq import ChatGroq
+from langchain_core.output_parsers import StrOutputParser
+from langchain_community.tools import DuckDuckGoSearchRun
+from langchain_core.runnables import RunnablePassthrough
+
 
 logger = logging.getLogger("API")
 logger.setLevel(logging.INFO)
+
+
 
 # --- 1. CONFIGURATION & MODELS ---
 load_dotenv()
@@ -74,7 +86,10 @@ async def startup_event():
         print("WARNING: GROQ_API_KEY not set. LLM features will fail.")
 
 # --- 4. HELPER FUNCTIONS ---
-
+class ToolQuery(BaseModel):
+    query: str
+    tool: str | None = None
+    
 def process_neo4j_records(records):
     """Converts Neo4j driver records into a JSON-friendly graph format for Frontend."""
     nodes = {}
@@ -379,3 +394,200 @@ async def design_experiment_for_path(body: ExperimentRequestBody):
         print(f"Experiment Design Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.post("/api/tools/query", tags=["Unified Tools"])
+async def tools_query_endpoint(payload: ToolQuery):
+    """
+    Handles specific tool requests: Web Search, Arxiv, or Neo4j Agent.
+    """
+    query = payload.query
+    tool = payload.tool
+    q_lower = query.lower()
+    
+    logger.info(f"Received Tool Query: '{query}' with tool: '{tool}'")
+    
+    try:
+        # Route based on Tool Selection
+        if tool == "arxiv" or (tool is None and "arxiv" in q_lower):
+            result = await run_arxiv_search(query)
+            
+        elif tool == "neo4j_agent" or (tool is None and "graph" in q_lower):
+            # Use the existing robust Cypher generator we fixed
+            logger.info("[Tool] Routing to Neo4j Agent...")
+            out = await text_to_cypher_and_run(query, run_query_fn=run_query_if_neo4j, use_llm=True)
+            
+            # Format answer nicely
+            records = out.get("results", [])
+            cypher = out.get("cypher", "")
+            
+            if isinstance(records, list) and len(records) > 0:
+                # Basic summarization of results
+                answer = f"Executed Cypher: {cypher}\n\nFound {len(records)} records. Top result: {str(records[0])[:200]}..."
+            else:
+                answer = f"Executed Cypher: {cypher}\n\nNo records found or query returned empty."
+                
+            result = {"source": "neo4j_aura", "answer": answer, "context": cypher}
+            
+        else:
+            # Default to Web Search
+            result = await run_duckduckgo_pipeline(query)
+            
+        return result
+        
+    except Exception as e:
+        logger.exception(f"Error handling tool query '{query}'")
+        raise HTTPException(status_code=500, detail=str(e))
+    
+NEO4J_CREDENTIALS_FILE = os.environ.get("NEO4J_CREDENTIALS_FILE")
+if NEO4J_CREDENTIALS_FILE:
+    logger.info(f"Loading Neo4j credentials from: {NEO4J_CREDENTIALS_FILE}")
+    if os.path.exists(NEO4J_CREDENTIALS_FILE):
+        load_dotenv(NEO4J_CREDENTIALS_FILE)
+        # Print credentials (for debugging only, remove in production!)
+        logger.info(f"CLIENT_ID: {os.getenv('CLIENT_ID')}")
+        logger.info(f"CLIENT_SECRET: {os.getenv('CLIENT_SECRET')}")
+    else:
+        logger.warning("NEO4J_CREDENTIALS_FILE path does not exist!")
+ 
+AURA_AGENT_API_URL = os.environ.get("AURA_AGENT_API_URL")
+CLIENT_ID = os.getenv("CLIENT_ID")
+CLIENT_SECRET = os.getenv("CLIENT_SECRET")
+AURA_AUTH_URL = "https://api.neo4j.io/oauth/token"
+ 
+# -----------------------------
+# LLM Helper
+# -----------------------------
+def get_llm_model():
+    if not os.getenv("GROQ_API_KEY"):
+        raise ValueError("Missing GROQ_API_KEY environment variable.")
+    return ChatGroq(
+        model=os.getenv("GROQ_MODEL", "meta-llama/llama-4-maverick-17b-128e-instruct"),
+        temperature=0
+    )
+ 
+# -----------------------------
+# DuckDuckGo + Groq
+# -----------------------------
+async def run_duckduckgo_pipeline(query: str):
+    logger.info(f"[DuckDuckGo] Searching: {query}")
+    search_tool = DuckDuckGoSearchRun()
+    search_query = f"Entegris company products, services, or news related to: {query}"
+    try:
+        retrieved_context = search_tool.run(search_query)
+    except Exception as e:
+        logger.error(f"DuckDuckGo search failed: {e}")
+        retrieved_context = f"Search failed: {e}"
+    if not retrieved_context.strip():
+        retrieved_context = "No specific results found."
+ 
+    prompt_template = """
+    You are an expert assistant for Entegris. Using only the provided context,
+    give a clear, concise answer. If not found, say so.
+ 
+    CONTEXT:
+    {context}
+ 
+    QUESTION:
+    {question}
+ 
+    ANSWER:
+    """
+    prompt = ChatPromptTemplate.from_template(prompt_template)
+    model = get_llm_model()
+    parser = StrOutputParser()
+ 
+    rag_chain = (
+        {"context": lambda _: retrieved_context, "question": RunnablePassthrough()}
+        | prompt
+        | model
+        | parser
+    )
+    try:
+        answer = await rag_chain.ainvoke(query)
+    except Exception as e:
+        logger.error(f"GROQ model failed: {e}")
+        answer = "Error generating answer."
+ 
+    return {"source": "duckduckgo", "answer": answer, "context": retrieved_context}
+ 
+# -----------------------------
+# arXiv Search
+# -----------------------------
+ARXIV_API_URL = "https://export.arxiv.org/api/query"
+async def run_arxiv_search(query: str):
+    logger.info(f"[arXiv] Searching: {query}")
+    params = {"search_query": f"all:{query}", "start": 0, "max_results": 5}
+    async with httpx.AsyncClient(timeout=30) as client:
+        try:
+            response = await client.get(ARXIV_API_URL, params=params)
+            response.raise_for_status()
+        except Exception as e:
+            logger.error(f"arXiv API failed: {e}")
+            raise HTTPException(status_code=500, detail=f"arXiv API error: {e}")
+ 
+        data = response.text
+ 
+    titles = []
+    for line in data.splitlines():
+        if "<title>" in line and "arXiv" not in line:
+            titles.append(line.replace("<title>", "").replace("</title>", "").strip())
+    if not titles:
+        titles = ["No papers found."]
+    return {"source": "arxiv", "query": query, "answer": titles}
+ 
+# -----------------------------
+# Neo4j Aura Agent
+# -----------------------------
+async def get_aura_token():
+    CLIENT_ID = os.getenv("CLIENT_ID", "").strip()
+    CLIENT_SECRET = os.getenv("CLIENT_SECRET", "").strip()
+    if not CLIENT_ID or not CLIENT_SECRET:
+        raise HTTPException(
+            status_code=500,
+            detail=f"CLIENT_ID or CLIENT_SECRET missing! CLIENT_ID={CLIENT_ID}, CLIENT_SECRET={'set' if CLIENT_SECRET else 'None'}"
+        )
+ 
+    logger.info("[Neo4j] Requesting Aura token")
+    async with httpx.AsyncClient() as client:
+        try:
+            response = await client.post(
+                AURA_AUTH_URL,
+                auth=(CLIENT_ID, CLIENT_SECRET),
+                data={"grant_type": "client_credentials"},
+            )
+            response.raise_for_status()
+        except Exception as e:
+            logger.error(f"Failed to get Aura token: {e}")
+            raise HTTPException(status_code=500, detail=f"Aura token error: {e}")
+ 
+        token = response.json().get("access_token")
+        if not token:
+            logger.error(f"Aura token missing, full response: {response.json()}")
+            raise HTTPException(status_code=500, detail="Aura token missing in response")
+        return token
+ 
+ 
+async def run_neo4j_aura_agent(question: str):
+    token = await get_aura_token()
+    logger.info(f"[Neo4j] Sending query: {question}")
+    async with httpx.AsyncClient(timeout=60*5) as client:
+        try:
+            response = await client.post(
+                AURA_AGENT_API_URL,
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/json",
+                    "Accept": "application/json"
+                },
+                json={"input": question},
+            )
+            response.raise_for_status()
+        except Exception as e:
+            logger.error(f"Neo4j Aura API error: {e}")
+            raise HTTPException(status_code=500, detail=f"Neo4j Aura error: {e}")
+ 
+        data = response.json()
+ 
+    answer_parts = [item.get("text") for item in data.get("content", []) if item and item.get("type")=="text"]
+    answer = "\n".join(answer_parts) if answer_parts else "No response from Aura Agent."
+    logger.info(f"[Neo4j] Answer generated: {answer[:100]}...")
+    return {"source": "neo4j_aura", "answer": answer}
