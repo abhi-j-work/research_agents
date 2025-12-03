@@ -17,7 +17,7 @@ export interface Message {
   results?: any;
 }
 
-const API_URL = "http://localhost:8002";
+const API_URL = "http://localhost:8003";
 
 interface Node extends d3.SimulationNodeDatum {
   id: string;

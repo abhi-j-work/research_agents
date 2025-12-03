@@ -31,7 +31,7 @@ interface ToolOption {
   isHybridTrigger?: boolean;
 }
 
-const API_URL = "http://localhost:8002";
+const API_URL = "http://localhost:8003";
 
 // ---- Configuration Data ----
 const TOOL_OPTIONS: ToolOption[] = [

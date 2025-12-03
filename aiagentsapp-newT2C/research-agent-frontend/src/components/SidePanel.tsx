@@ -9,7 +9,7 @@ import {
 import { toast } from 'sonner';
 import type { GraphDataPayload } from '../models';
 
-const API_URL = "http://localhost:8002";
+const API_URL = "http://localhost:8003";
 
 interface SidePanelProps {
   setViewMode: (mode: 'chat' | 'graph' | 'graph-chat') => void;

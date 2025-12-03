@@ -9,6 +9,11 @@ from typing import List, Optional, Dict, Any
 from fastapi import FastAPI, UploadFile, File, HTTPException, Query, Response
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
+import logging
+from fastapi import HTTPException, Query
+
+logger = logging.getLogger("API")
+logger.setLevel(logging.INFO)
 
 # --- 1. CONFIGURATION & MODELS ---
 load_dotenv()
@@ -74,7 +79,7 @@ def process_neo4j_records(records):
     """Converts Neo4j driver records into a JSON-friendly graph format for Frontend."""
     nodes = {}
     edges = []
-    
+    print(records)
     for record in records:
         for key, value in record.items():
             # Handle Nodes
@@ -259,20 +264,53 @@ async def create_kg_from_conversation(body: TextRequestBody):
 # --- C. DEBUG & UTILS ---
 
 @app.post("/api/graph/text-to-cypher", tags=["Knowledge Graph"])
-async def text_to_cypher_endpoint(body: TextRequestBody, useLLM: bool = Query(False, alias="useLLM")):
+async def text_to_cypher_endpoint(
+    body: TextRequestBody,
+    useLLM: bool = Query(False, alias="useLLM")
+):
     """Debug endpoint to see what Cypher query is generated for a text."""
+    
+    logger.info("ENTER text_to_cypher_endpoint")
+    logger.info(f"Request Body: {body.text}")
+    logger.info(f"useLLM flag: {useLLM}")
+
     try:
-        out = await text_to_cypher_and_run(body.text, run_query_fn=run_query_if_neo4j, use_llm=useLLM)
-        
-        # Convert raw Neo4j results to Frontend Graph format
+        # Generate and run Cypher
+        out = await text_to_cypher_and_run(
+            body.text,
+            run_query_fn=run_query_if_neo4j,
+            use_llm=useLLM
+        )
+
+        logger.info("Cypher generated successfully")
+        logger.debug(f"Generated Cypher Query: {out.get('cypher')}")
+        logger.debug(f"Raw Neo4j Output: {out}")
+
+        # Convert Neo4j records for frontend
         graph_data = process_neo4j_records(out.get("results", []) or [])
+
+        logger.info("Graph processing complete")
         
-        return {
+        response = {
             "cypher": out.get("cypher"),
             "graph": graph_data,
             "results": out.get("results")
         }
+
+        logger.info("EXIT text_to_cypher_endpoint (Success)")
+        return response
+
     except Exception as e:
+        # RCA-friendly detailed log
+        logger.error("Error in text_to_cypher_endpoint", exc_info=True)
+        logger.error(f"RCA: Failure occurred while processing request text='{body.text}' "
+                     f"with useLLM={useLLM}. Possible root causes include: "
+                     f"(1) Invalid Cypher generated, "
+                     f"(2) Neo4j query execution failure, "
+                     f"(3) Data format mismatch in result parsing, "
+                     f"(4) Unexpected internal bug or network timeout.")
+
+        logger.info("EXIT text_to_cypher_endpoint (Failure)")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/graph/node-associations", tags=["Knowledge Graph"])

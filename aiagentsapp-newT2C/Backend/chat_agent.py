@@ -122,7 +122,7 @@ async def text_to_cypher_and_run(
             prompt = ChatPromptTemplate.from_template(prompt_template)
             
             # --- UPDATED MODEL NAME ---
-            model_name = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+            model_name = os.getenv("GROQ_MODEL", "meta-llama/llama-4-maverick-17b-128e-instruct")
             print(f"[DEBUG] Using Groq Model: {model_name}")
             
             model = ChatGroq(model=model_name, temperature=0)
@@ -183,17 +183,53 @@ async def text_to_cypher_and_run(
         try:
             from neo4j import GraphDatabase
             driver = GraphDatabase.driver(neo_uri, auth=(neo_user, neo_pass))
+            
+            # Optional: Verify connectivity before running query
+            try:
+                driver.verify_connectivity()
+                print("[DEBUG] Connection verified successfully.")
+            except Exception as conn_err:
+                 print(f"[ERROR] Connection verification failed: {conn_err}")
+                 raise conn_err
+
             with driver.session() as session:
                 def _run(tx):
-                    print(f"[DEBUG] Running query on Neo4j...")
+                    print(f"[DEBUG] Executing Cypher inside transaction: {cypher}")
                     res = tx.run(cypher)
-                    return [r.data() for r in res]
+                    
+                    # --- CRITICAL FIX & LOGGING START ---
+                    # Convert to list to consume the result
+                    records = list(res)
+                    
+                    print(f"[DEBUG] Query executed. Fetched {len(records)} records.")
+                    
+                    # Deep inspection log to verify the fix works
+                    if len(records) > 0:
+                        first_record = records[0]
+                        print(f"[DEBUG] Sample Record Type: {type(first_record)}")
+                        print(f"[DEBUG] Sample Record Keys: {first_record.keys()}")
+                        
+                        # Check if it holds Node objects (what we want) or dicts
+                        sample_value = first_record[0] if len(first_record.values()) > 0 else None
+                        print(f"[DEBUG] Sample Value Type: {type(sample_value)}")
+                        if hasattr(sample_value, 'labels'):
+                            print(f"[DEBUG] ✅ Success: Value is a Neo4j Node with labels: {sample_value.labels}")
+                        else:
+                            print(f"[DEBUG] ⚠️ Warning: Value does not look like a Node object (might be a dict/string).")
+
+                    return records
+                    # --- CRITICAL FIX & LOGGING END ---
+                
                 results = session.read_transaction(_run)
+            
             driver.close()
-            print(f"[DEBUG] Direct Neo4j execution successful. Records: {len(results)}")
+            print(f"[DEBUG] Direct Neo4j execution successful. Total Records: {len(results)}")
             note += " | executed_on_neo4j"
         except Exception as e:
             print(f"[ERROR] Direct Neo4j execution failed: {e}")
+            # detailed error logging
+            import traceback
+            traceback.print_exc()
             results = {"error": f"neo4j_exec_failed: {e}"}
             note += " | neo4j_exec_failed"
     else:
@@ -201,6 +237,7 @@ async def text_to_cypher_and_run(
 
     print(f"--- [DEBUG] End text_to_cypher_and_run ---\n")
     return {"cypher": cypher, "results": results, "note": note}
+
 
 async def search_web_only(query: str) -> str:
     """
