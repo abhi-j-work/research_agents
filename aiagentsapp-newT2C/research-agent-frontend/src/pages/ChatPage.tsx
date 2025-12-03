@@ -13,7 +13,7 @@ import {
   FileUp,
   Loader2,
   CheckCircle,
-  Terminal, // <--- 1. Added Terminal Icon
+  Terminal,
   Sparkles,
   Menu,
   RefreshCw
@@ -21,7 +21,7 @@ import {
 
 // ---- Interfaces ----
 interface ChatPageProps {
-  onStartConversation?: (query: string) => void; // Made optional as we handle it internally now
+  onStartConversation?: (query: string) => void;
   isHybridMode: boolean;
   setIsHybridMode: (val: boolean) => void;
 }
@@ -63,10 +63,10 @@ const TOOL_OPTIONS: ToolOption[] = [
     isHybridTrigger: true 
   },
   { 
-    label: "Neo4j Agent (Direct)",     // <--- 2. Added Neo4j Agent
+    label: "Neo4j Agent (Direct)",
     value: "neo4j_agent", 
     icon: Terminal, 
-    color: "#fbbf24",                 // Amber color
+    color: "#fbbf24",
     glow: "rgba(251, 191, 36, 0.5)", 
     isHybridTrigger: false 
   },
@@ -102,10 +102,10 @@ const ChatPage: React.FC<ChatPageProps> = ({ onStartConversation, isHybridMode, 
   const [loading, setLoading] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   
-  // --- 3. Local State for Manual Tool Selection ---
+  // Local State for Manual Tool Selection
   const [manualTool, setManualTool] = useState<string | null>(null);
   
-  // --- Upload State ---
+  // Upload State
   const [isUploading, setIsUploading] = useState(false);
   const [uploadStatus, setUploadStatus] = useState<"idle" | "success" | "error">("idle");
   
@@ -114,7 +114,7 @@ const ChatPage: React.FC<ChatPageProps> = ({ onStartConversation, isHybridMode, 
   const chatEndRef = useRef<HTMLDivElement | null>(null);
   const abortRef = useRef<AbortController | null>(null);
 
-  // --- 4. Logic to Determine Active Tool ---
+  // Logic to Determine Active Tool
   const selectedToolValue = manualTool || (isHybridMode ? "neo4j" : "duckduckgo");
   const activeToolObj = TOOL_OPTIONS.find((t) => t.value === selectedToolValue);
 
@@ -126,24 +126,7 @@ const ChatPage: React.FC<ChatPageProps> = ({ onStartConversation, isHybridMode, 
     chatEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [messages, loading]);
 
-  // --- Helper: Parse Backend Response ---
-  const parseResponse = (data: any) => {
-    let sources: string[] = [];
-    if (data.source === "arxiv" && Array.isArray(data.answer)) {
-      sources = data.answer; // Arxiv returns titles in answer field currently
-      return { answer: "Here are the relevant papers found:", sources, toolUsed: data.source };
-    }
-    if (data.context) {
-      sources = [data.context.substring(0, 150) + "..."];
-    }
-    return { 
-      answer: data.answer || "No response generated.", 
-      sources, 
-      toolUsed: data.source 
-    };
-  };
-
-  // --- Handle Submit (API Call) ---
+  // --- Handle Submit (Routing Logic) ---
   const handleSubmit = async (e?: React.FormEvent, overridePrompt?: string) => {
     e?.preventDefault();
     const text = overridePrompt || inputValue;
@@ -156,30 +139,69 @@ const ChatPage: React.FC<ChatPageProps> = ({ onStartConversation, isHybridMode, 
     setLoading(true);
     setMenuOpen(false);
 
-    // 2. Prepare API Call
     try {
       if (abortRef.current) abortRef.current.abort();
       const controller = new AbortController();
       abortRef.current = controller;
 
-      // Determine tool to send to backend
-      const toolToSend = manualTool || (isHybridMode ? "neo4j" : "duckduckgo");
-
-      const response = await axios.post(
-        `${API_URL}/api/tools/query`,
-        { query: text, tool: toolToSend },
-        { signal: controller.signal }
-      );
-
-      // 3. Parse & Add Assistant Message
-      const { answer, sources, toolUsed } = parseResponse(response.data);
+      // Determine which tool is selected
+      const currentTool = manualTool || (isHybridMode ? "neo4j" : "duckduckgo");
       
-      const botMsg: Message = { 
-        role: "assistant", 
-        content: answer, 
-        sources, 
-        toolUsed 
-      };
+      let responseData;
+      let botMsg: Message;
+
+      // --- ROUTING LOGIC ---
+      if (currentTool === "neo4j" || currentTool === "duckduckgo") {
+        // CASE A: Hybrid RAG or Web Search -> Call /api/chat
+        console.log(`Routing to /api/chat (Tool: ${currentTool})`);
+        
+        const response = await axios.post(
+          `${API_URL}/api/chat`,
+          { query: text }, // ChatRequestBody structure
+          { signal: controller.signal }
+        );
+        
+        responseData = response.data;
+        
+        // Map ChatResponse to Message
+        botMsg = {
+          role: "assistant",
+          content: responseData.answer,
+          sources: responseData.citations || [], // ChatResponse uses 'citations'
+          toolUsed: currentTool // Manually tag the tool for UI badge
+        };
+
+      } else {
+        // CASE B: Agent or Arxiv -> Call /api/tools/query
+        console.log(`Routing to /api/tools/query (Tool: ${currentTool})`);
+        
+        const response = await axios.post(
+          `${API_URL}/api/tools/query`,
+          { query: text, tool: currentTool }, // ToolQuery structure
+          { signal: controller.signal }
+        );
+        
+        responseData = response.data;
+        
+        // Parse Tool Response
+        let sources: string[] = [];
+        if (responseData.source === "arxiv" && Array.isArray(responseData.answer)) {
+           // Special case for Arxiv list
+           sources = responseData.answer;
+           responseData.answer = "Here are the relevant papers found:";
+        } else if (responseData.context) {
+           sources = [responseData.context.substring(0, 150) + "..."];
+        }
+
+        botMsg = {
+          role: "assistant",
+          content: responseData.answer,
+          sources: sources,
+          toolUsed: responseData.source || currentTool
+        };
+      }
+
+      // 2. Add Assistant Message
       setMessages((prev) => [...prev, botMsg]);
 
     } catch (error: any) {
@@ -187,7 +209,7 @@ const ChatPage: React.FC<ChatPageProps> = ({ onStartConversation, isHybridMode, 
       console.error("Chat Error:", error);
       const errorMsg: Message = { 
         role: "assistant", 
-        content: "⚠️ Error connecting to the agent. Please check the backend connection." 
+        content: "⚠️ Error connecting to the server. Please check the backend connection." 
       };
       setMessages((prev) => [...prev, errorMsg]);
     } finally {
@@ -257,7 +279,7 @@ const ChatPage: React.FC<ChatPageProps> = ({ onStartConversation, isHybridMode, 
         animate={{ opacity: 1, scale: 1 }}
         transition={{ duration: 0.6, ease: [0.16, 1, 0.3, 1] }}
       >
-        {/* Sidebar (Optional - kept for layout consistency) */}
+        {/* Sidebar */}
         <aside style={styles.sidebar}>
           <button style={styles.sideBtn} title="Menu"><Menu size={18} /></button>
           <button style={styles.sideBtn} onClick={handleClearChat} title="New Chat"><Plus size={18} /></button>
@@ -283,7 +305,6 @@ const ChatPage: React.FC<ChatPageProps> = ({ onStartConversation, isHybridMode, 
                   </div>
                   <h2 style={styles.heroText}>Entegris Intelligence</h2>
                   <p style={styles.heroSub}>
-                    {/* --- 5. Updated Hero Text Logic --- */}
                     {selectedToolValue === "neo4j_agent" 
                       ? "Direct Mode: Talking to Neo4j Database"
                       : isHybridMode 
@@ -339,8 +360,9 @@ const ChatPage: React.FC<ChatPageProps> = ({ onStartConversation, isHybridMode, 
                       {/* Tool Badge */}
                       {msg.role === "assistant" && msg.toolUsed && (
                         <div style={styles.toolBadge}>
-                          {msg.toolUsed === "neo4j_aura" ? "Graph Agent" : 
-                           msg.toolUsed === "arxiv" ? "Research Papers" : "Web Search"}
+                          {msg.toolUsed === "neo4j_agent" ? "Graph Agent" : 
+                           msg.toolUsed === "arxiv" ? "Research Papers" : 
+                           msg.toolUsed === "neo4j" ? "Hybrid RAG" : "Web Search"}
                         </div>
                       )}
                       
@@ -350,7 +372,9 @@ const ChatPage: React.FC<ChatPageProps> = ({ onStartConversation, isHybridMode, 
                       {msg.sources && msg.sources.length > 0 && (
                         <div style={styles.sources}>
                           {msg.sources.map((s, i) => (
-                            <div key={i} style={styles.sourceTag}>{s}</div>
+                            <div key={i} style={styles.sourceTag}>
+                              {typeof s === 'string' ? s : JSON.stringify(s)}
+                            </div>
                           ))}
                         </div>
                       )}
@@ -456,7 +480,6 @@ const ChatPage: React.FC<ChatPageProps> = ({ onStartConversation, isHybridMode, 
                 onChange={(e) => setInputValue(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && handleSubmit(e)}
                 placeholder={
-                  // --- 6. Updated Placeholder Logic ---
                   selectedToolValue === "neo4j_agent"
                     ? "// Agent Mode: Generate Cypher & Query DB..."
                     : isHybridMode
@@ -492,7 +515,7 @@ const ChatPage: React.FC<ChatPageProps> = ({ onStartConversation, isHybridMode, 
 const styles: Record<string, React.CSSProperties> = {
   page: { height: "100%", width: "100%", display: "flex", justifyContent: "center", alignItems: "center", position: "relative", overflow: "hidden", background: '#020617' },
   gridBg: { position: "absolute", top: 0, left: 0, width: "100%", height: "100%", backgroundImage: "linear-gradient(rgba(255,255,255,0.03) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.03) 1px, transparent 1px)", backgroundSize: "40px 40px", zIndex: 0, pointerEvents: "none" },
-  panel: { width: "100%", height: "100%", display: "flex", zIndex: 10, flexDirection: "row" }, // Changed to row for sidebar
+  panel: { width: "100%", height: "100%", display: "flex", zIndex: 10, flexDirection: "row" }, 
   sidebar: { width: "60px", background: "rgba(0,0,0,0.25)", borderRight: "1px solid rgba(255,255,255,0.1)", display: "flex", flexDirection: "column", alignItems: "center", padding: "1rem 0.5rem", gap: "1rem" },
   sideBtn: { display: "flex", alignItems: "center", justifyContent: "center", width: 36, height: 36, borderRadius: 8, color: "#cbd5e1", background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)", cursor: "pointer" },
   main: { flex: 1, display: "flex", flexDirection: "column", position: "relative" },

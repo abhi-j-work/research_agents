@@ -89,7 +89,7 @@ async def startup_event():
 class ToolQuery(BaseModel):
     query: str
     tool: str | None = None
-    
+
 def process_neo4j_records(records):
     """Converts Neo4j driver records into a JSON-friendly graph format for Frontend."""
     nodes = {}
@@ -428,7 +428,6 @@ async def tools_query_endpoint(payload: ToolQuery):
             result = {"source": "neo4j_aura", "answer": answer, "context": cypher}
             
         else:
-            # Default to Web Search
             result = await run_duckduckgo_pipeline(query)
             
         return result
